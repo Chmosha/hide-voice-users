@@ -1,13 +1,30 @@
 import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/ContextMenu";
 import { DataStore } from "@api/index";
 import definePlugin from "@utils/types";
-import { FluxDispatcher, Menu, React } from "@webpack/common";
-import { User } from "discord-types/general";
+import { Menu, React } from "@webpack/common";
 
 const STORAGE_KEY = "HideVoiceUsers_List";
 let hiddenUsers = new Set<string>();
+let styleEl: HTMLStyleElement | null = null;
 
-const userContextMenuPatch: NavContextMenuPatchCallback = (children, { user }: { user: User }) => {
+function updateStyles() {
+    if (!styleEl) {
+        styleEl = document.createElement("style");
+        styleEl.id = "hide-voice-users-style";
+        document.head.appendChild(styleEl);
+    }
+    if (hiddenUsers.size === 0) {
+        styleEl.textContent = "";
+        return;
+    }
+    const rules = Array.from(hiddenUsers).map(
+        id => `div[class*="voiceUser"]:has(img[src*="${id}"]) { display: none !important; }`
+    );
+    styleEl.textContent = rules.join("\n");
+}
+
+const userContextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
+    const user = props?.user;
     if (!user) return;
 
     const [isHidden, setIsHidden] = React.useState(hiddenUsers.has(user.id));
@@ -21,9 +38,7 @@ const userContextMenuPatch: NavContextMenuPatchCallback = (children, { user }: {
             setIsHidden(true);
         }
         await DataStore.set(STORAGE_KEY, Array.from(hiddenUsers));
-        
-        // Принудительно обновляем список войса
-        FluxDispatcher.dispatch({ type: "VOICE_STATE_UPDATES", voiceStates: [] });
+        updateStyles();
     };
 
     const group = findGroupChildrenByChildId("user-profile", children) ?? children;
@@ -43,26 +58,19 @@ export default definePlugin({
 
     contextMenus: {
         "user-context": userContextMenuPatch,
-        "user-profile-actions": userContextMenuPatch // Меню трех точек в профиле
-    },
-
-    patches: [
-        {
-            // Патчим рендер списка пользователей под голосовым каналом
-            find: "VoiceUser:",
-            replacement: {
-                match: /(?<=renderVoiceUsers\(\)\{.{0,200}?\.map\()(\i=>)/,
-                replace: "user => !$self.isHidden(user?.user?.id) && ($1)"
-            }
-        }
-    ],
-
-    isHidden(userId?: string) {
-        return userId ? hiddenUsers.has(userId) : false;
+        "user-profile-actions": userContextMenuPatch
     },
 
     async start() {
         const saved = await DataStore.get<string[]>(STORAGE_KEY);
         if (saved) hiddenUsers = new Set(saved);
+        updateStyles();
+    },
+
+    stop() {
+        if (styleEl) {
+            styleEl.remove();
+            styleEl = null;
+        }
     }
 });
